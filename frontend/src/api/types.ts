@@ -253,11 +253,54 @@ export interface StreamEvent {
 
 export interface Integration {
   id: string;
+  home_id?: string;
   name: string;
   domain: string;
   config: Record<string, unknown>;
   device_count: number;
   created_at: string;
+}
+
+export interface MqttEntitySpec {
+  entity_id: string;
+  domain: string;
+  name: string;
+  state?: string;
+  state_topic: string;
+  command_topic?: string | null;
+  availability_topic?: string | null;
+  unit_of_measurement?: string | null;
+  device_class?: string | null;
+  attributes?: Record<string, unknown>;
+  brightness_state_topic?: string | null;
+  brightness_command_topic?: string | null;
+}
+
+export interface MqttDeviceCreate {
+  name: string;
+  type: string;
+  area_id?: string | null;
+  manufacturer?: string | null;
+  model?: string | null;
+  status?: string;
+  entities: MqttEntitySpec[];
+}
+
+export interface SystemStatus {
+  service: string;
+  api: 'ready' | string;
+  database: 'ready' | string;
+  mqtt: {
+    enabled: boolean;
+    connected: boolean;
+    host?: string | null;
+    port?: number | null;
+  };
+  runtime: {
+    seed_enabled: boolean;
+    sim_enabled: boolean;
+    run_migrations_on_start: boolean;
+  };
 }
 
 export interface DiscoveredDevice {

@@ -43,8 +43,43 @@ Error responses keep this shape:
 - `GET|PATCH|DELETE /integrations/{integration_id}`
 - `GET /integrations/{integration_id}/discovery`
 - `POST /integrations/{integration_id}/import`
+- `POST /integrations/{integration_id}/mqtt/devices`
 
-Supported onboarding remains mock/demo-oriented for MVP flows.
+Supported onboarding includes mock/demo discovery plus manual MQTT device construction for custom topics.
+
+`POST /integrations/{integration_id}/mqtt/devices` accepts device metadata and one or more MQTT entity specs:
+
+```json
+{
+  "name": "Presentation Lamp",
+  "type": "light",
+  "area_id": null,
+  "manufacturer": "homeIQ",
+  "model": "MQTT-1",
+  "entities": [
+    {
+      "entity_id": "light.presentation_lamp",
+      "domain": "light",
+      "name": "Presentation Lamp",
+      "state": "off",
+      "state_topic": "home/custom/presentation_lamp/state",
+      "command_topic": "home/custom/presentation_lamp/set",
+      "availability_topic": "home/custom/presentation_lamp/availability",
+      "attributes": { "brightness": 0 },
+      "brightness_state_topic": "home/custom/presentation_lamp/brightness/state",
+      "brightness_command_topic": "home/custom/presentation_lamp/brightness/set"
+    }
+  ]
+}
+```
+
+The endpoint returns the created `Device` shape with nested `entities`.
+
+## System
+
+- `GET /system/status`
+
+Returns API, database, MQTT, and runtime flags for presentation and operational checks.
 
 ## Energy And ML
 

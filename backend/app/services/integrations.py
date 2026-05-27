@@ -8,193 +8,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Device, Entity, EntityState, Integration, utcnow
+from app.schemas import MqttDeviceCreate, MqttEntitySpec
+from app.services.integration_catalog import get_catalog, supported_integration_domain
 
-
-DISCOVERY_CATALOG: dict[str, list[dict[str, Any]]] = {
-    "demo": [
-        {
-            "discovered_id": "demo.porch_light",
-            "name": "Porch Light",
-            "type": "light",
-            "manufacturer": "Demo",
-            "model": "DL-100",
-            "entities": [
-                {
-                    "entity_id": "light.porch_light",
-                    "domain": "light",
-                    "name": "Porch Light",
-                    "state": "off",
-                    "attributes": {"brightness": 0},
-                }
-            ],
-        },
-        {
-            "discovered_id": "demo.garage_outlet",
-            "name": "Garage Outlet",
-            "type": "switch",
-            "manufacturer": "Demo",
-            "model": "DS-10",
-            "entities": [
-                {
-                    "entity_id": "switch.garage_outlet",
-                    "domain": "switch",
-                    "name": "Garage Outlet",
-                    "state": "off",
-                    "attributes": {},
-                }
-            ],
-        },
-        {
-            "discovered_id": "demo.office_climate",
-            "name": "Office Climate",
-            "type": "climate",
-            "manufacturer": "Demo",
-            "model": "DC-22",
-            "entities": [
-                {
-                    "entity_id": "climate.office",
-                    "domain": "climate",
-                    "name": "Office Climate",
-                    "state": "off",
-                    "attributes": {"current_temperature": 22, "target_temperature": 22, "hvac_mode": "off"},
-                    "device_class": "temperature",
-                }
-            ],
-        },
-        {
-            "discovered_id": "demo.balcony_sensor",
-            "name": "Balcony Sensor",
-            "type": "sensor",
-            "manufacturer": "Demo",
-            "model": "DT-2",
-            "entities": [
-                {
-                    "entity_id": "sensor.balcony_temperature",
-                    "domain": "sensor",
-                    "name": "Balcony Temperature",
-                    "state": "21.5",
-                    "attributes": {"friendly_name": "Balcony Temperature"},
-                    "unit_of_measurement": "°C",
-                    "device_class": "temperature",
-                },
-                {
-                    "entity_id": "sensor.balcony_humidity",
-                    "domain": "sensor",
-                    "name": "Balcony Humidity",
-                    "state": "41",
-                    "attributes": {},
-                    "unit_of_measurement": "%",
-                    "device_class": "humidity",
-                },
-            ],
-        },
-        {
-            "discovered_id": "demo.solar_meter",
-            "name": "Solar Meter",
-            "type": "energy_meter",
-            "manufacturer": "Demo",
-            "model": "DE-3",
-            "entities": [
-                {
-                    "entity_id": "sensor.solar_meter_power",
-                    "domain": "sensor",
-                    "name": "Solar Meter Power",
-                    "state": "0",
-                    "attributes": {"energy_meter": True},
-                    "unit_of_measurement": "W",
-                    "device_class": "power",
-                },
-                {
-                    "entity_id": "sensor.solar_meter_total",
-                    "domain": "sensor",
-                    "name": "Solar Meter Total",
-                    "state": "0",
-                    "attributes": {"state_class": "total_increasing"},
-                    "unit_of_measurement": "kWh",
-                    "device_class": "energy",
-                },
-            ],
-        },
-    ],
-    "mqtt": [
-        {
-            "discovered_id": "mqtt.living_room_strip",
-            "name": "MQTT Living Room Strip",
-            "type": "light",
-            "manufacturer": "MQTT",
-            "model": "RGB-Strip",
-            "entities": [
-                {
-                    "entity_id": "light.mqtt_living_room_strip",
-                    "domain": "light",
-                    "name": "MQTT Living Room Strip",
-                    "state": "off",
-                    "attributes": {
-                        "brightness": 0,
-                        "state_topic": "home/living_room/strip/state",
-                        "command_topic": "home/living_room/strip/set",
-                        "brightness_state_topic": "home/living_room/strip/brightness/state",
-                        "brightness_command_topic": "home/living_room/strip/brightness/set",
-                    },
-                }
-            ],
-        },
-        {
-            "discovered_id": "mqtt.garage_relay",
-            "name": "MQTT Garage Relay",
-            "type": "switch",
-            "manufacturer": "MQTT",
-            "model": "Relay-1",
-            "entities": [
-                {
-                    "entity_id": "switch.mqtt_garage_relay",
-                    "domain": "switch",
-                    "name": "MQTT Garage Relay",
-                    "state": "off",
-                    "attributes": {
-                        "state_topic": "home/garage/relay/state",
-                        "command_topic": "home/garage/relay/set",
-                    },
-                }
-            ],
-        },
-        {
-            "discovered_id": "mqtt.office_sensor",
-            "name": "MQTT Office Sensor",
-            "type": "sensor",
-            "manufacturer": "MQTT",
-            "model": "TH-1",
-            "entities": [
-                {
-                    "entity_id": "sensor.mqtt_office_temperature",
-                    "domain": "sensor",
-                    "name": "MQTT Office Temperature",
-                    "state": "22.4",
-                    "attributes": {
-                        "state_topic": "home/office/sensor/temperature",
-                    },
-                    "unit_of_measurement": "°C",
-                    "device_class": "temperature",
-                },
-                {
-                    "entity_id": "sensor.mqtt_office_humidity",
-                    "domain": "sensor",
-                    "name": "MQTT Office Humidity",
-                    "state": "43",
-                    "attributes": {
-                        "state_topic": "home/office/sensor/humidity",
-                    },
-                    "unit_of_measurement": "%",
-                    "device_class": "humidity",
-                },
-            ],
-        },
-    ],
-}
-
-
-def supported_integration_domain(domain: str) -> bool:
-    return domain in DISCOVERY_CATALOG
+_CONTROLLABLE_DOMAINS = {"light", "switch", "climate"}
+_SUPPORTED_DEVICE_TYPES = {"light", "switch", "sensor", "climate", "energy_meter"}
 
 
 async def get_integration_or_404(db: AsyncSession, integration_id: uuid.UUID) -> Integration:
@@ -207,7 +25,8 @@ async def get_integration_or_404(db: AsyncSession, integration_id: uuid.UUID) ->
 async def discovery_preview(db: AsyncSession, integration: Integration) -> list[dict[str, Any]]:
     if not supported_integration_domain(integration.domain):
         raise HTTPException(400, "Unsupported integration domain")
-    entity_ids = [entity["entity_id"] for item in DISCOVERY_CATALOG[integration.domain] for entity in item["entities"]]
+    catalog = get_catalog(integration.domain)
+    entity_ids = [entity["entity_id"] for item in catalog for entity in item["entities"]]
     existing = set((await db.execute(select(Entity.entity_id).where(Entity.entity_id.in_(entity_ids)))).scalars().all())
     return [
         {
@@ -231,14 +50,14 @@ async def discovery_preview(db: AsyncSession, integration: Integration) -> list[
             ],
             "already_imported": any(entity["entity_id"] in existing for entity in item["entities"]),
         }
-        for item in DISCOVERY_CATALOG[integration.domain]
+        for item in catalog
     ]
 
 
 async def import_discovered_devices(db: AsyncSession, integration: Integration, discovered_ids: list[str] | None = None) -> dict[str, Any]:
     if not supported_integration_domain(integration.domain):
         raise HTTPException(400, "Unsupported integration domain")
-    catalog = {item["discovered_id"]: item for item in DISCOVERY_CATALOG[integration.domain]}
+    catalog = {item["discovered_id"]: item for item in get_catalog(integration.domain)}
     selected_ids = discovered_ids or list(catalog)
     unknown = [item_id for item_id in selected_ids if item_id not in catalog]
     if unknown:
@@ -296,3 +115,103 @@ async def import_discovered_devices(db: AsyncSession, integration: Integration, 
         imported.append(device)
     await db.commit()
     return {"imported": imported, "skipped": skipped}
+
+
+def _validate_mqtt_topic(topic: str | None, *, field_name: str) -> str | None:
+    if topic is None:
+        return None
+    value = topic.strip()
+    if not value:
+        raise HTTPException(400, f"{field_name} is required")
+    if "+" in value or "#" in value:
+        raise HTTPException(400, f"{field_name} must not contain MQTT wildcards")
+    return value
+
+
+def _entity_attrs(spec: MqttEntitySpec) -> dict[str, Any]:
+    attrs = dict(spec.attributes or {})
+    for key in (
+        "state_topic",
+        "command_topic",
+        "availability_topic",
+        "brightness_state_topic",
+        "brightness_command_topic",
+    ):
+        value = getattr(spec, key)
+        if value is not None:
+            attrs[key] = value.strip()
+    return attrs
+
+
+async def create_mqtt_device(db: AsyncSession, integration: Integration, payload: MqttDeviceCreate) -> Device:
+    if integration.domain != "mqtt":
+        raise HTTPException(400, "MQTT device constructor requires an mqtt integration")
+    if payload.type not in _SUPPORTED_DEVICE_TYPES:
+        raise HTTPException(400, "Unsupported device type")
+
+    seen: set[str] = set()
+    for spec in payload.entities:
+        entity_id = spec.entity_id.strip()
+        if not entity_id:
+            raise HTTPException(400, "entity_id is required")
+        if entity_id in seen:
+            raise HTTPException(400, f"Duplicate entity_id: {entity_id}")
+        seen.add(entity_id)
+
+        spec.state_topic = _validate_mqtt_topic(spec.state_topic, field_name=f"{entity_id}.state_topic") or ""
+        spec.command_topic = _validate_mqtt_topic(spec.command_topic, field_name=f"{entity_id}.command_topic")
+        spec.availability_topic = _validate_mqtt_topic(spec.availability_topic, field_name=f"{entity_id}.availability_topic")
+        spec.brightness_state_topic = _validate_mqtt_topic(spec.brightness_state_topic, field_name=f"{entity_id}.brightness_state_topic")
+        spec.brightness_command_topic = _validate_mqtt_topic(spec.brightness_command_topic, field_name=f"{entity_id}.brightness_command_topic")
+
+        if spec.domain in _CONTROLLABLE_DOMAINS and not spec.command_topic:
+            raise HTTPException(400, f"{entity_id}.command_topic is required for {spec.domain}")
+
+    existing = (await db.execute(select(Entity.entity_id).where(Entity.entity_id.in_(seen)))).scalars().first()
+    if existing is not None:
+        raise HTTPException(400, f"Entity already exists: {existing}")
+
+    device = Device(
+        home_id=integration.home_id,
+        integration_id=integration.id,
+        area_id=payload.area_id,
+        name=payload.name,
+        type=payload.type,
+        manufacturer=payload.manufacturer,
+        model=payload.model,
+        status=payload.status,
+    )
+    db.add(device)
+    await db.flush()
+
+    now = utcnow()
+    for spec in payload.entities:
+        entity = Entity(
+            entity_id=spec.entity_id.strip(),
+            device_id=device.id,
+            area_id=device.area_id,
+            domain=spec.domain.strip(),
+            platform="mqtt",
+            name=spec.name,
+            original_name=spec.name,
+            state=spec.state,
+            attributes_json=_entity_attrs(spec),
+            unit_of_measurement=spec.unit_of_measurement,
+            device_class=spec.device_class,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(entity)
+        db.add(
+            EntityState(
+                entity_id=entity.entity_id,
+                state=entity.state,
+                attributes_json=entity.attributes_json,
+                last_changed=now,
+                last_updated=now,
+                created_at=now,
+            )
+        )
+
+    await db.commit()
+    return device

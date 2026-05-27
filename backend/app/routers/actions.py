@@ -4,7 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter
 
-from app.routers.deps import CurrentUser, Db
+from app.core.dependencies import CurrentUser, Db
 from app.schemas import ActionCall
 from app.services.actions import call_action
 

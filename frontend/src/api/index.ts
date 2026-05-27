@@ -5,6 +5,7 @@ import type {
   Area,
   Automation,
   Dashboard,
+  Device,
   EnergyConsumption,
   EnergyDevice,
   EnergyForecast,
@@ -18,7 +19,9 @@ import type {
   User,
   Integration,
   DiscoveredDevice,
-  ImportResult
+  ImportResult,
+  MqttDeviceCreate,
+  SystemStatus
 } from './types';
 export { devicesApi } from '../features/devices/api';
 export { entitiesApi } from '../features/entities/api';
@@ -54,6 +57,10 @@ export const homesApi = {
 
 export const dashboardApi = {
   get: () => apiClient<Dashboard>('/dashboard')
+};
+
+export const systemApi = {
+  status: () => apiClient<SystemStatus>('/system/status')
 };
 
 export const areasApi = {
@@ -115,5 +122,7 @@ export const integrationsApi = {
     apiClient<ImportResult>(`/integrations/${id}/import`, {
       method: 'POST',
       body: JSON.stringify(discoveredIds ? { discovered_ids: discoveredIds } : {})
-    })
+    }),
+  createMqttDevice: (id: string, data: MqttDeviceCreate) =>
+    apiClient<Device>(`/integrations/${id}/mqtt/devices`, { method: 'POST', body: JSON.stringify(data) })
 };

@@ -1,6 +1,6 @@
-# Smart Home Platform Monorepo
+# homeIQ Monorepo
 
-Clean monorepo for the Smart Home MVP. This repository combines:
+Clean monorepo for the homeIQ MVP. This repository combines:
 
 - `backend`: FastAPI + PostgreSQL backend with seed data, automations, events, energy endpoints, and integration tests.
 - `frontend`: React + Vite + TypeScript client for the MVP flows.
@@ -61,6 +61,27 @@ Verification:
 backend/scripts/verify.sh
 cd frontend && npm test && npm run build
 ```
+
+## Local Backend With Docker Infra
+
+Supported local backend workflow:
+
+```bash
+docker compose up -d postgres mosquitto
+cp backend/.env.local.example backend/.env
+cd backend && ./scripts/dev.sh
+```
+
+Checks:
+
+```bash
+curl http://localhost:8080/api/health
+curl -X POST http://localhost:8080/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"testadmin","password":"testpass123"}'
+```
+
+This path is the supported local backend setup. It relies on Docker for PostgreSQL and Mosquitto, while the FastAPI app runs from your local Python environment.
 
 ## Notes
 

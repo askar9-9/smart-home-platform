@@ -1,6 +1,6 @@
-# Smart Home ML Package
+# homeIQ ML Package
 
-This package contains the reusable ML-specific pieces for the Smart Home platform:
+This package contains the reusable ML-specific pieces for homeIQ:
 
 - feature extraction for energy anomaly detection;
 - model artifact loading;

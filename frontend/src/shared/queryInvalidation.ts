@@ -7,6 +7,8 @@ export async function invalidateDeviceReadModels(queryClient: QueryClient) {
     queryClient.invalidateQueries({ queryKey: queryKeys.areas.all() }),
     queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.all() }),
     queryClient.invalidateQueries({ queryKey: queryKeys.entities.all() }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.energy.all() }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.events.all() }),
   ]);
 }
 

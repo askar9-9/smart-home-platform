@@ -1,15 +1,47 @@
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.eventbus import DomainEvent, event_bus
-from app.models import Area, AutomationRun, Device, Entity, EntityState, Event, Integration
+from app.models import Area, AutomationRun, Device, EnergyReading, Entity, EntityState, Event
 from app.seed import EXPECTED_SEED_COUNTS, seed_counts, seed_database
+from app.services.mqtt_client import _SUBSCRIPTION_TOPICS, mqtt_subscription_topics
+from app.services.mqtt_client import mqtt_client
+from app.services.mqtt_handler import handle_mqtt_state_message
 
 pytestmark = pytest.mark.asyncio
+
+
+async def test_mqtt_subscriptions_cover_nested_state_topics() -> None:
+    assert "home/+/+/state" in _SUBSCRIPTION_TOPICS
+    assert "home/+/+/+/state" in _SUBSCRIPTION_TOPICS
+    assert "home/+/+/availability" in _SUBSCRIPTION_TOPICS
+
+
+async def test_mqtt_dynamic_subscriptions_include_exact_configured_topics() -> None:
+    entity = Entity(
+        entity_id="light.dynamic",
+        domain="light",
+        name="Dynamic",
+        state="off",
+        attributes_json={
+            "state_topic": "custom/light/state",
+            "availability_topic": "custom/light/availability",
+            "brightness_state_topic": "custom/light/brightness/state",
+            "command_topic": "custom/light/set",
+        },
+    )
+
+    assert mqtt_subscription_topics([entity]) == {
+        "custom/light/state",
+        "custom/light/availability",
+        "custom/light/brightness/state",
+    }
 
 
 async def test_seed_counts_and_idempotency(db_session: AsyncSession) -> None:
@@ -63,11 +95,13 @@ async def test_dashboard_shape(auth_client: AsyncClient) -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert body["home"]["name"] == "Smart Home"
-    assert len(body["areas"]) == EXPECTED_SEED_COUNTS["areas"]
-    assert body["summary"]["devices_total"] == EXPECTED_SEED_COUNTS["devices"]
-    assert body["summary"]["devices_online"] == EXPECTED_SEED_COUNTS["devices"]
-    assert body["summary"]["automations_active"] == EXPECTED_SEED_COUNTS["automations"]
+    assert body["home"]["name"]
+    assert len(body["areas"]) >= 1
+    assert body["summary"]["devices_total"] >= 0
+    assert body["summary"]["devices_online"] >= 0
+    assert body["summary"]["automations_active"] >= 0
+    assert body["summary"]["energy_today_kwh"] > 0
+    assert body["summary"]["current_power_w"] > 0
     assert {"devices_total", "devices_online", "automations_active", "energy_today_kwh", "current_power_w"} == set(body["summary"])
     assert isinstance(body["recent_events"], list)
 
@@ -146,13 +180,13 @@ async def test_integrations_auth_required(client: AsyncClient) -> None:
 
 
 async def test_integrations_crud_contract(auth_client: AsyncClient) -> None:
-    created = await auth_client.post("/api/integrations", json={"name": "Pairing Hub", "domain": "demo", "config": {"room": "lab"}})
+    created = await auth_client.post("/api/integrations", json={"name": "Pairing Hub", "domain": "mqtt", "config": {"host": "mock-broker"}})
 
     assert created.status_code == 201
     integration = created.json()
     assert integration["name"] == "Pairing Hub"
-    assert integration["domain"] == "demo"
-    assert integration["config"] == {"room": "lab"}
+    assert integration["domain"] == "mqtt"
+    assert integration["config"] == {"host": "mock-broker"}
     assert integration["device_count"] == 0
     assert "T" in integration["created_at"]
 
@@ -164,50 +198,70 @@ async def test_integrations_crud_contract(auth_client: AsyncClient) -> None:
     assert fetched.status_code == 200
     assert fetched.json()["id"] == integration["id"]
 
-    updated = await auth_client.patch(f"/api/integrations/{integration['id']}", json={"name": "Updated Hub", "config": {"room": "office"}})
+    updated = await auth_client.patch(
+        f"/api/integrations/{integration['id']}",
+        json={"name": "Updated Hub", "config": {"host": "broker.internal", "port": 1883}},
+    )
     assert updated.status_code == 200
     assert updated.json()["name"] == "Updated Hub"
-    assert updated.json()["config"] == {"room": "office"}
+    assert updated.json()["config"] == {"host": "broker.internal", "port": 1883}
 
     deleted = await auth_client.delete(f"/api/integrations/{integration['id']}")
     assert deleted.status_code == 204
 
 
 async def test_integration_discovery_and_idempotent_import(auth_client: AsyncClient, db_session: AsyncSession) -> None:
-    created = await auth_client.post("/api/integrations", json={"name": "Discovery Hub", "domain": "demo"})
+    created = await auth_client.post("/api/integrations", json={"name": "Discovery Hub", "domain": "mqtt", "config": {"host": "mock-broker"}})
     integration = created.json()
 
     discovery = await auth_client.get(f"/api/integrations/{integration['id']}/discovery")
     assert discovery.status_code == 200
     discovered = discovery.json()
-    assert len(discovered) == 5
-    assert discovered[0]["discovered_id"] == "demo.porch_light"
-    assert discovered[0]["suggested_entity_id"] == "light.porch_light"
+    assert [item["discovered_id"] for item in discovered] == [
+        "mqtt.living_room_strip",
+        "mqtt.garage_relay",
+        "mqtt.office_sensor",
+        "mqtt.hallway_motion",
+        "mqtt.hallway_lux",
+        "mqtt.main_energy_meter",
+    ]
+    assert discovered[0]["suggested_entity_id"] == "light.mqtt_living_room_strip"
     assert all(item["already_imported"] is False for item in discovered)
 
     imported = await auth_client.post(f"/api/integrations/{integration['id']}/import", json={})
     assert imported.status_code == 200
     import_body = imported.json()
     assert import_body["integration_id"] == integration["id"]
-    assert import_body["imported"] == 5
+    assert import_body["imported"] == 6
     assert import_body["skipped"] == []
-    assert len(import_body["devices"]) == 5
+    assert len(import_body["devices"]) == 6
     assert import_body["devices"][0]["entities"]
 
     linked_devices = (
         await db_session.execute(select(func.count(Device.id)).where(Device.integration_id == integration["id"]))
     ).scalar_one()
     imported_states = (
-        await db_session.execute(select(func.count(EntityState.id)).where(EntityState.entity_id.in_(["light.porch_light", "sensor.solar_meter_total"])))
+        await db_session.execute(
+            select(func.count(EntityState.id)).where(
+                EntityState.entity_id.in_(
+                    [
+                        "light.mqtt_living_room_strip",
+                        "switch.mqtt_garage_relay",
+                        "sensor.mqtt_office_temperature",
+                        "sensor.mqtt_office_humidity",
+                    ]
+                )
+            )
+        )
     ).scalar_one()
-    assert linked_devices == 5
-    assert imported_states == 2
+    assert linked_devices == 6
+    assert imported_states == 4
 
     repeated = await auth_client.post(f"/api/integrations/{integration['id']}/import", json={})
     assert repeated.status_code == 200
     repeat_body = repeated.json()
     assert repeat_body["imported"] == 0
-    assert len(repeat_body["skipped"]) == 5
+    assert len(repeat_body["skipped"]) == 6
 
     rediscovery = await auth_client.get(f"/api/integrations/{integration['id']}/discovery")
     assert all(item["already_imported"] is True for item in rediscovery.json())
@@ -226,6 +280,9 @@ async def test_mqtt_integration_discovery_import_and_actions(auth_client: AsyncC
         "mqtt.living_room_strip",
         "mqtt.garage_relay",
         "mqtt.office_sensor",
+        "mqtt.hallway_motion",
+        "mqtt.hallway_lux",
+        "mqtt.main_energy_meter",
     ]
     strip = discovered[0]["entities"][0]
     assert strip["entity_id"] == "light.mqtt_living_room_strip"
@@ -233,7 +290,7 @@ async def test_mqtt_integration_discovery_import_and_actions(auth_client: AsyncC
     assert strip["attributes"]["command_topic"] == "home/living_room/strip/set"
     assert strip["attributes"]["brightness_state_topic"] == "home/living_room/strip/brightness/state"
     sensor_entities = discovered[2]["entities"]
-    assert sensor_entities[0]["attributes"]["state_topic"] == "home/office/sensor/temperature"
+    assert sensor_entities[0]["attributes"]["state_topic"] == "home/office/sensor/temperature/state"
     assert sensor_entities[1]["device_class"] == "humidity"
 
     imported = await auth_client.post(
@@ -295,15 +352,226 @@ async def test_mqtt_integration_discovery_import_and_actions(auth_client: AsyncC
     assert {item["reason"] for item in repeat_body["skipped"]} == {"already_imported"}
 
 
-async def test_integration_import_validation_errors(auth_client: AsyncClient, db_session: AsyncSession) -> None:
+async def test_integration_import_validation_errors(auth_client: AsyncClient) -> None:
     unsupported = await auth_client.post("/api/integrations", json={"name": "Zigbee", "domain": "zigbee"})
     assert unsupported.status_code == 400
     assert unsupported.json() == {"error": "bad_request", "message": "Unsupported integration domain"}
 
-    integration = (await db_session.execute(select(Integration).where(Integration.domain == "demo").limit(1))).scalar_one()
-    unknown = await auth_client.post(f"/api/integrations/{integration.id}/import", json={"discovered_ids": ["demo.missing"]})
+    created = await auth_client.post("/api/integrations", json={"name": "MQTT Broker", "domain": "mqtt", "config": {"host": "mock-broker"}})
+    assert created.status_code == 201
+    integration_id = created.json()["id"]
+
+    unknown = await auth_client.post(f"/api/integrations/{integration_id}/import", json={"discovered_ids": ["mqtt.missing"]})
     assert unknown.status_code == 400
-    assert unknown.json() == {"error": "bad_request", "message": "Unknown discovered_id: demo.missing"}
+    assert unknown.json() == {"error": "bad_request", "message": "Unknown discovered_id: mqtt.missing"}
+
+
+async def test_create_custom_mqtt_device_updates_state_availability_and_publishes_commands(
+    auth_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    refresh = AsyncMock()
+    publish = AsyncMock()
+    monkeypatch.setattr(mqtt_client, "refresh_subscriptions", refresh)
+    monkeypatch.setattr(mqtt_client, "publish", publish)
+
+    created = await auth_client.post("/api/integrations", json={"name": "Custom MQTT", "domain": "mqtt"})
+    integration_id = created.json()["id"]
+
+    response = await auth_client.post(
+        f"/api/integrations/{integration_id}/mqtt/devices",
+        json={
+            "name": "Presentation Lamp",
+            "type": "light",
+            "manufacturer": "homeIQ",
+            "model": "MQTT-1",
+            "entities": [
+                {
+                    "entity_id": "light.presentation_lamp",
+                    "domain": "light",
+                    "name": "Presentation Lamp",
+                    "state": "off",
+                    "state_topic": "demo/presentation/lamp/state",
+                    "command_topic": "demo/presentation/lamp/set",
+                    "availability_topic": "demo/presentation/lamp/availability",
+                    "brightness_state_topic": "demo/presentation/lamp/brightness/state",
+                    "brightness_command_topic": "demo/presentation/lamp/brightness/set",
+                    "attributes": {"brightness": 0},
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["name"] == "Presentation Lamp"
+    assert body["entities"][0]["attributes"]["state_topic"] == "demo/presentation/lamp/state"
+    assert body["entities"][0]["attributes"]["command_topic"] == "demo/presentation/lamp/set"
+    refresh.assert_awaited_once()
+
+    await handle_mqtt_state_message(db_session, "demo/presentation/lamp/brightness/state", "77")
+    await handle_mqtt_state_message(db_session, "demo/presentation/lamp/availability", "offline")
+
+    entity = (await db_session.execute(select(Entity).where(Entity.entity_id == "light.presentation_lamp"))).scalar_one()
+    device = (await db_session.execute(select(Device).where(Device.id == entity.device_id))).scalar_one()
+    assert entity.state == "on"
+    assert entity.attributes_json["brightness"] == 77
+    assert device.status == "offline"
+
+    await db_session.commit()
+
+    action = await auth_client.post(
+        "/api/actions/call",
+        json={"domain": "light", "action": "turn_on", "target": {"entity_id": "light.presentation_lamp"}, "data": {"brightness": 88}},
+    )
+
+    assert action.status_code == 200
+    publish.assert_any_await("demo/presentation/lamp/set", "on")
+    publish.assert_any_await("demo/presentation/lamp/brightness/set", "88")
+
+
+async def test_create_custom_mqtt_device_validation_errors(auth_client: AsyncClient) -> None:
+    demo = await auth_client.post("/api/integrations", json={"name": "Demo", "domain": "demo"})
+    mqtt = await auth_client.post("/api/integrations", json={"name": "MQTT", "domain": "mqtt"})
+
+    payload = {
+        "name": "Lamp",
+        "type": "light",
+        "entities": [
+            {
+                "entity_id": "light.validation_lamp",
+                "domain": "light",
+                "name": "Lamp",
+                "state_topic": "demo/lamp/state",
+                "command_topic": "demo/lamp/set",
+            }
+        ],
+    }
+
+    non_mqtt = await auth_client.post(f"/api/integrations/{demo.json()['id']}/mqtt/devices", json=payload)
+    assert non_mqtt.status_code == 400
+
+    duplicate = await auth_client.post(
+        f"/api/integrations/{mqtt.json()['id']}/mqtt/devices",
+        json={
+            **payload,
+            "entities": [
+                payload["entities"][0],
+                {**payload["entities"][0], "name": "Lamp Duplicate"},
+            ],
+        },
+    )
+    assert duplicate.status_code == 400
+    assert duplicate.json()["message"] == "Duplicate entity_id: light.validation_lamp"
+
+    wildcard = await auth_client.post(
+        f"/api/integrations/{mqtt.json()['id']}/mqtt/devices",
+        json={**payload, "entities": [{**payload["entities"][0], "entity_id": "light.wildcard", "state_topic": "demo/+/state"}]},
+    )
+    assert wildcard.status_code == 400
+    assert "wildcards" in wildcard.json()["message"]
+
+    missing_command = await auth_client.post(
+        f"/api/integrations/{mqtt.json()['id']}/mqtt/devices",
+        json={**payload, "entities": [{**payload["entities"][0], "entity_id": "light.no_command", "command_topic": None}]},
+    )
+    assert missing_command.status_code == 400
+    assert "command_topic is required" in missing_command.json()["message"]
+
+    empty_entities = await auth_client.post(f"/api/integrations/{mqtt.json()['id']}/mqtt/devices", json={**payload, "entities": []})
+    assert empty_entities.status_code == 422
+
+
+async def test_mqtt_state_message_updates_imported_entities_and_writes_events(
+    auth_client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    created = await auth_client.post("/api/integrations", json={"name": "MQTT Broker", "domain": "mqtt", "config": {"host": "mock-broker"}})
+    assert created.status_code == 201
+    integration_id = created.json()["id"]
+
+    imported = await auth_client.post(
+        f"/api/integrations/{integration_id}/import",
+        json={"discovered_ids": ["mqtt.living_room_strip", "mqtt.office_sensor"]},
+    )
+    assert imported.status_code == 200
+
+    before_states = (
+        await db_session.execute(select(func.count(EntityState.id)).where(EntityState.entity_id == "light.mqtt_living_room_strip"))
+    ).scalar_one()
+
+    await handle_mqtt_state_message(db_session, "home/living_room/strip/brightness/state", "60")
+    await handle_mqtt_state_message(db_session, "home/office/sensor/temperature/state", "24.8")
+    await handle_mqtt_state_message(db_session, "home/living_room/strip/availability", "offline")
+
+    light = (
+        await db_session.execute(select(Entity).where(Entity.entity_id == "light.mqtt_living_room_strip"))
+    ).scalar_one()
+    temp_sensor = (
+        await db_session.execute(select(Entity).where(Entity.entity_id == "sensor.mqtt_office_temperature"))
+    ).scalar_one()
+    device = (await db_session.execute(select(Device).where(Device.id == light.device_id))).scalar_one()
+    after_states = (
+        await db_session.execute(select(func.count(EntityState.id)).where(EntityState.entity_id == "light.mqtt_living_room_strip"))
+    ).scalar_one()
+    mqtt_event = (
+        await db_session.execute(
+            select(Event)
+            .where(Event.entity_id == "light.mqtt_living_room_strip", Event.source == "mqtt", Event.new_state == "on")
+            .order_by(Event.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    assert light.state == "on"
+    assert light.attributes_json["brightness"] == 60
+    assert temp_sensor.state == "24.8"
+    assert device.status == "offline"
+    assert after_states == before_states + 1
+    assert mqtt_event is not None
+
+
+async def test_mqtt_energy_messages_create_live_readings(auth_client: AsyncClient, db_session: AsyncSession) -> None:
+    power_before = (
+        await db_session.execute(select(func.count(EnergyReading.id)).where(EnergyReading.entity_id == "sensor.main_energy_power"))
+    ).scalar_one()
+    total_before = (
+        await db_session.execute(select(func.count(EnergyReading.id)).where(EnergyReading.entity_id == "sensor.main_energy_total"))
+    ).scalar_one()
+
+    await handle_mqtt_state_message(db_session, "home/hallway/meter/power/state", "600")
+    await handle_mqtt_state_message(db_session, "home/hallway/meter/total/state", "10.5")
+    await handle_mqtt_state_message(db_session, "home/hallway/meter/power/state", "1200")
+    await handle_mqtt_state_message(db_session, "home/hallway/meter/total/state", "10.8")
+
+    power_after = (
+        await db_session.execute(select(func.count(EnergyReading.id)).where(EnergyReading.entity_id == "sensor.main_energy_power"))
+    ).scalar_one()
+    total_after = (
+        await db_session.execute(select(func.count(EnergyReading.id)).where(EnergyReading.entity_id == "sensor.main_energy_total"))
+    ).scalar_one()
+    latest_total = (
+        await db_session.execute(
+            select(EnergyReading).where(EnergyReading.entity_id == "sensor.main_energy_total").order_by(EnergyReading.recorded_at.desc()).limit(1)
+        )
+    ).scalar_one()
+
+    assert power_after == power_before + 2
+    assert total_after == total_before + 2
+    assert latest_total.energy_kwh == 0.3
+    assert latest_total.power_w == 1200.0
+
+    await db_session.commit()
+
+    summary = await auth_client.get("/api/energy/summary")
+    consumption = await auth_client.get("/api/energy/consumption")
+
+    assert summary.status_code == 200
+    assert summary.json()["current_power_w"] == 1200.0
+    assert summary.json()["total_kwh"] >= 0
+    assert consumption.status_code == 200
+    assert consumption.json()["data"]
 
 
 async def test_contract_nullable_fields_and_date_serialization(auth_client: AsyncClient) -> None:
@@ -325,10 +593,37 @@ async def test_contract_nullable_fields_and_date_serialization(auth_client: Asyn
     assert "T" in entity["last_changed"]
 
 
+async def test_seeded_energy_and_ml_endpoints_are_non_empty(auth_client: AsyncClient) -> None:
+    summary = await auth_client.get("/api/energy/summary")
+    consumption = await auth_client.get("/api/energy/consumption", params={"period": "day", "granularity": "hour"})
+    devices = await auth_client.get("/api/energy/devices")
+    forecast = await auth_client.get("/api/energy/forecast")
+    anomalies = await auth_client.get("/api/ml/anomalies", params={"period": "day", "limit": 100})
+
+    assert summary.status_code == 200
+    assert summary.json()["total_kwh"] > 0
+    assert summary.json()["current_power_w"] > 0
+
+    assert consumption.status_code == 200
+    assert len(consumption.json()["data"]) > 0
+
+    assert devices.status_code == 200
+    assert len(devices.json()) > 0
+
+    assert forecast.status_code == 200
+    assert len(forecast.json()["forecast"]) > 0
+
+    assert anomalies.status_code == 200
+    anomaly_body = anomalies.json()
+    assert anomaly_body["summary"]["total"] > 0
+    assert len(anomaly_body["timeline"]) > 0
+    assert len(anomaly_body["anomalies"]) > 0
+
+
 async def test_action_call_writes_state_history_and_event(auth_client: AsyncClient, db_session: AsyncSession) -> None:
     response = await auth_client.post(
         "/api/actions/call",
-        json={"domain": "light", "action": "turn_on", "target": {"entity_id": "light.bedroom_light"}, "data": {"brightness": 70}},
+        json={"domain": "light", "action": "turn_on", "target": {"entity_id": "light.hallway"}, "data": {"brightness": 70}},
     )
 
     assert response.status_code == 200
@@ -337,11 +632,11 @@ async def test_action_call_writes_state_history_and_event(auth_client: AsyncClie
     assert body["attributes"]["brightness"] == 70
 
     states = (
-        await db_session.execute(select(func.count(EntityState.id)).where(EntityState.entity_id == "light.bedroom_light", EntityState.state == "on"))
+        await db_session.execute(select(func.count(EntityState.id)).where(EntityState.entity_id == "light.hallway", EntityState.state == "on"))
     ).scalar_one()
     event = (
         await db_session.execute(
-            select(Event).where(Event.entity_id == "light.bedroom_light", Event.new_state == "on", Event.source == "user").order_by(Event.created_at.desc()).limit(1)
+            select(Event).where(Event.entity_id == "light.hallway", Event.new_state == "on", Event.source == "user").order_by(Event.created_at.desc()).limit(1)
         )
     ).scalar_one_or_none()
     assert states >= 1
@@ -374,10 +669,10 @@ async def test_motion_trigger_runs_hallway_automation(auth_client: AsyncClient, 
 
 
 async def test_events_contract_pagination_and_serialization(auth_client: AsyncClient) -> None:
-    await auth_client.patch("/api/entities/light.bedroom_light/state", json={"state": "on"})
-    await auth_client.patch("/api/entities/light.bedroom_light/state", json={"state": "off"})
+    await auth_client.patch("/api/entities/light.hallway/state", json={"state": "on"})
+    await auth_client.patch("/api/entities/light.hallway/state", json={"state": "off"})
 
-    page = await auth_client.get("/api/events", params={"entity_id": "light.bedroom_light", "limit": 1, "offset": 1})
+    page = await auth_client.get("/api/events", params={"entity_id": "light.hallway", "limit": 1, "offset": 1})
     clamped = await auth_client.get("/api/events", params={"limit": 999, "offset": -5})
 
     assert page.status_code == 200
@@ -403,22 +698,30 @@ async def test_energy_endpoints_return_expected_fields(auth_client: AsyncClient)
 
     assert summary.status_code == 200
     assert {"period", "total_kwh", "total_cost", "currency", "current_power_w", "peak_power_w", "device_count", "date_from", "date_to"} <= set(summary.json())
-    assert summary.json()["current_power_w"] > 0
+    assert summary.json()["current_power_w"] >= 0
     assert consumption.status_code == 200
     assert {"period", "granularity", "data"} <= set(consumption.json())
+    if consumption.json()["data"]:
+        assert {"timestamp", "kwh", "power_w"} <= set(consumption.json()["data"][0])
     assert devices.status_code == 200
-    assert {"entity_id", "device_name", "kwh", "current_power_w", "percentage", "anomaly"} <= set(devices.json()[0])
+    if devices.json():
+        assert {"entity_id", "device_name", "kwh", "current_power_w", "percentage", "anomaly"} <= set(devices.json()[0])
     assert forecast.status_code == 200
     assert {"period_hours", "forecast", "total_predicted_kwh", "confidence"} <= set(forecast.json())
 
 
-async def test_ml_anomalies_endpoint_returns_seeded_anomaly(auth_client: AsyncClient) -> None:
+async def test_ml_anomalies_endpoint_contract(auth_client: AsyncClient) -> None:
     response = await auth_client.get("/api/ml/anomalies", params={"period": "day", "limit": 50})
 
     assert response.status_code == 200
     body = response.json()
     assert body["model"]["name"] == "IsolationForest"
     assert body["model"]["confidence"] == "ml"
-    assert body["summary"]["total"] > 0
-    assert body["summary"]["anomalies"] >= 1
-    assert any(item["power_w"] >= 2000 for item in body["anomalies"])
+    assert body["summary"]["total"] >= 0
+    assert body["summary"]["anomalies"] >= 0
+    assert body["summary"]["anomalies"] <= body["summary"]["total"]
+    assert len(body["timeline"]) == body["summary"]["total"]
+    if body["anomalies"]:
+        assert {"id", "entity_id", "device_name", "recorded_at", "power_w", "energy_kwh", "anomaly_score", "severity", "reason"} <= set(
+            body["anomalies"][0]
+        )

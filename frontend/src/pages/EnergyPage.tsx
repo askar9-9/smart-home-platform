@@ -16,6 +16,7 @@ export function EnergyPage() {
   const forecast = useQuery({ queryKey: queryKeys.energy.forecast(), queryFn: energyApi.forecast });
   const lineData = consumption.data?.data.map((point) => ({ ...point, label: chartTime(point.timestamp) })) ?? [];
   const forecastData = forecast.data?.forecast.map((point) => ({ label: `${point.hour}:00`, kwh: point.predicted_kwh, power_w: point.predicted_power_w })) ?? [];
+  const deviceData = devices.data ?? [];
 
   return (
     <>
@@ -35,22 +36,64 @@ export function EnergyPage() {
       <div className="mt-4 grid gap-4 xl:grid-cols-2">
         <Card>
           <h2 className="mb-3 text-base font-semibold">Потребление</h2>
-          <div className="h-72"><ResponsiveContainer width="100%" height="100%"><LineChart data={lineData}><CartesianGrid stroke="#dbe3ed" /><XAxis dataKey="label" tick={{ fontSize: 11 }} /><YAxis tick={{ fontSize: 11 }} /><Tooltip /><Line dataKey="kwh" stroke="#0b7fab" strokeWidth={2} dot={false} /><Line dataKey="power_w" stroke="#15803d" strokeWidth={2} dot={false} /></LineChart></ResponsiveContainer></div>
+          <div className="h-72">
+            {lineData.length ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={lineData}>
+                  <CartesianGrid stroke="#dbe3ed" />
+                  <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} />
+                  <Tooltip />
+                  <Line dataKey="kwh" stroke="#0b7fab" strokeWidth={2} dot={false} />
+                  <Line dataKey="power_w" stroke="#15803d" strokeWidth={2} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <EmptyChart title="Нет исторических показаний энергии. Включите demo simulation или дождитесь первых MQTT readings." />
+            )}
+          </div>
         </Card>
         <Card>
           <h2 className="mb-3 text-base font-semibold">Топ потребителей</h2>
-          <div className="h-72"><ResponsiveContainer width="100%" height="100%"><BarChart data={devices.data ?? []}><CartesianGrid stroke="#dbe3ed" /><XAxis dataKey="device_name" tick={{ fontSize: 11 }} /><YAxis tick={{ fontSize: 11 }} /><Tooltip /><Bar dataKey="kwh" fill="#0b7fab" /></BarChart></ResponsiveContainer></div>
+          <div className="h-72">
+            {deviceData.length ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={deviceData}>
+                  <CartesianGrid stroke="#dbe3ed" />
+                  <XAxis dataKey="device_name" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} />
+                  <Tooltip />
+                  <Bar dataKey="kwh" fill="#0b7fab" />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <EmptyChart title="Топ потребителей появится после первых энергоизмерений." />
+            )}
+          </div>
         </Card>
       </div>
       <div className="mt-4 grid gap-4 xl:grid-cols-[1fr_0.7fr]">
         <Card>
           <h2 className="mb-3 text-base font-semibold">Прогноз на 24 часа</h2>
-          <div className="h-56"><ResponsiveContainer width="100%" height="100%"><LineChart data={forecastData}><XAxis dataKey="label" tick={{ fontSize: 11 }} /><YAxis tick={{ fontSize: 11 }} /><Tooltip /><Line dataKey="kwh" stroke="#0b7fab" strokeWidth={2} dot={false} /></LineChart></ResponsiveContainer></div>
+          <div className="h-56">
+            {forecastData.length ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={forecastData}>
+                  <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} />
+                  <Tooltip />
+                  <Line dataKey="kwh" stroke="#0b7fab" strokeWidth={2} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <EmptyChart title="Прогноз появится после накопления истории показаний." />
+            )}
+          </div>
         </Card>
         <Card>
           <h2 className="mb-3 text-base font-semibold">Аномалии</h2>
           <div className="space-y-3">
-            {devices.data?.map((device) => <div key={device.entity_id} className="flex items-center justify-between gap-3 border-b border-line pb-2 text-sm last:border-0"><span>{device.device_name}</span>{device.anomaly ? <Badge tone="warning">{device.anomaly_reason ?? 'Аномалия'}</Badge> : <Badge>Норма</Badge>}</div>)}
+            {deviceData.length ? deviceData.map((device) => <div key={device.entity_id} className="flex items-center justify-between gap-3 border-b border-line pb-2 text-sm last:border-0"><span>{device.device_name}</span>{device.anomaly ? <Badge tone="warning">{device.anomaly_reason ?? 'Аномалия'}</Badge> : <Badge>Норма</Badge>}</div>) : <EmptyChart title="Анализ аномалий устройств появится после первых MQTT readings." compact />}
           </div>
         </Card>
       </div>
@@ -60,4 +103,12 @@ export function EnergyPage() {
 
 function Metric({ label, value }: { label: string; value: string }) {
   return <Card><div className="text-2xl font-semibold">{value}</div><div className="text-xs text-muted">{label}</div></Card>;
+}
+
+function EmptyChart({ title, compact = false }: { title: string; compact?: boolean }) {
+  return (
+    <div className={`flex h-full items-center justify-center rounded-md border border-dashed border-line bg-panel px-4 text-center text-sm text-muted ${compact ? "min-h-24" : ""}`}>
+      {title}
+    </div>
+  );
 }

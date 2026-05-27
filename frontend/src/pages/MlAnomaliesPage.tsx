@@ -36,6 +36,12 @@ export function MlAnomaliesPage() {
   const data = anomalies.data;
   const timeline = data?.timeline.map((point) => ({ ...point, label: chartTime(point.timestamp), anomalyPower: point.anomaly ? point.power_w : null })) ?? [];
   const anomalyPoints = timeline.filter((point) => point.anomaly);
+  const noMlData = !anomalies.isLoading && !anomalies.isError && timeline.length === 0;
+  const anomalyEmptyTitle = anomalies.isLoading
+    ? 'Загрузка аномалий...'
+    : noMlData
+      ? 'ML модель доступна, но для выбранного периода нет данных энергии.'
+      : 'ML аномалии не найдены';
 
   return (
     <>
@@ -61,6 +67,14 @@ export function MlAnomaliesPage() {
               <div className="font-semibold">ML модель недоступна</div>
               <div>Запустите обучение модели или проверьте backend artifact.</div>
             </div>
+          </div>
+        </Card>
+      ) : null}
+
+      {noMlData ? (
+        <Card className="border-amber-200 bg-amber-50">
+          <div className="text-sm text-amber-900">
+            ML модель загружена, но таймлайн пуст. Для демо нужны seeded energy readings или включенная MQTT simulation.
           </div>
         </Card>
       ) : null}
@@ -95,7 +109,7 @@ export function MlAnomaliesPage() {
                 </LineChart>
               </ResponsiveContainer>
             ) : (
-              <EmptyState title="Нет показаний энергии за выбранный период" />
+              <EmptyState title="ML модель доступна, но для выбранного периода нет данных энергии." />
             )}
           </div>
         </Card>
@@ -115,7 +129,7 @@ export function MlAnomaliesPage() {
                 </ScatterChart>
               </ResponsiveContainer>
             ) : (
-              <EmptyState title={anomalies.isLoading ? 'Загрузка аномалий...' : 'ML аномалии не найдены'} />
+              <EmptyState title={anomalyEmptyTitle} />
             )}
           </div>
         </Card>
@@ -159,7 +173,7 @@ export function MlAnomaliesPage() {
             </table>
           </div>
         ) : (
-          <EmptyState title={anomalies.isLoading ? 'Загрузка журнала...' : 'За выбранный период ML аномалии не найдены'} />
+          <EmptyState title={anomalies.isLoading ? 'Загрузка журнала...' : noMlData ? 'Журнал ML пуст, потому что нет данных энергии.' : 'За выбранный период ML аномалии не найдены'} />
         )}
       </Card>
     </>

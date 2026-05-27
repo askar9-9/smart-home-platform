@@ -8,7 +8,7 @@ from fastapi import APIRouter, Query
 from sqlalchemy import func, select
 
 from app.models import Entity, EntityState
-from app.routers.deps import CurrentUser, Db
+from app.core.dependencies import CurrentUser, Db
 from app.schemas import EntityStatePatch
 from app.serializers import entity_out
 from app.services.entities import get_entity_or_404, set_entity_state

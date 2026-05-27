@@ -4,7 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter
 
-from app.routers.deps import CurrentUser, Db
+from app.core.dependencies import CurrentUser, Db
 from app.services.energy import (
     energy_consumption as build_energy_consumption,
     energy_devices as build_energy_devices,

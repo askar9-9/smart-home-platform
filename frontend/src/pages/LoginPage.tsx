@@ -7,8 +7,8 @@ import { Input, PrimaryButton } from '../components/ui';
 
 export function LoginPage() {
   const { token, login } = useAuth();
-  const [username, setUsername] = useState('testadmin');
-  const [password, setPassword] = useState('testpass123');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
@@ -36,17 +36,30 @@ export function LoginPage() {
         <div className="mb-6 flex items-center gap-3">
           <Gauge className="h-8 w-8 text-primary" />
           <div>
-            <h1 className="text-xl font-semibold">Умный дом</h1>
+            <h1 className="text-xl font-semibold">homeIQ</h1>
             <p className="text-sm text-muted">Войдите в систему</p>
           </div>
         </div>
         <label className="block text-sm font-medium">
           Логин
-          <Input className="mt-2 w-full" value={username} onChange={(event) => setUsername(event.target.value)} required />
+          <Input
+            autoComplete="username"
+            className="mt-2 w-full"
+            value={username}
+            onChange={(event) => setUsername(event.target.value)}
+            required
+          />
         </label>
         <label className="mt-4 block text-sm font-medium">
           Пароль
-          <Input className="mt-2 w-full" type="password" value={password} onChange={(event) => setPassword(event.target.value)} required />
+          <Input
+            autoComplete="current-password"
+            className="mt-2 w-full"
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            required
+          />
         </label>
         {error ? <div role="alert" className="mt-4 rounded-md bg-red-50 p-3 text-sm text-danger">{error}</div> : null}
         <PrimaryButton className="mt-6 w-full" disabled={loading}>

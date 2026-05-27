@@ -37,7 +37,7 @@ export function AppShell() {
       <div className="flex h-16 items-center gap-2 border-b border-line px-4">
         <Gauge className="h-6 w-6 text-primary" />
         <div>
-          <div className="text-sm font-semibold text-ink">Умный дом</div>
+          <div className="text-sm font-semibold text-ink">homeIQ</div>
           <div className="text-xs text-muted">Панель управления</div>
         </div>
       </div>
@@ -81,7 +81,7 @@ export function AppShell() {
               <Menu className="h-4 w-4" />
             </Button>
             <div>
-              <div className="text-sm font-semibold">{resolvedUser?.name ?? 'Умный дом'}</div>
+              <div className="text-sm font-semibold">{resolvedUser?.name ?? 'homeIQ'}</div>
               <div className="text-xs text-muted">{me.isError ? 'Нет связи с сервером' : 'Подключено'}</div>
             </div>
           </div>

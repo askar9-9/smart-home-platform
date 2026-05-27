@@ -6,7 +6,7 @@ from fastapi import APIRouter
 from sqlalchemy import select
 
 from app.models import Home
-from app.routers.deps import CurrentUser, Db
+from app.core.dependencies import CurrentUser, Db
 from app.schemas import HomeCreate
 from app.serializers import home_out
 

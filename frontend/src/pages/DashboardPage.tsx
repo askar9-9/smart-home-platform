@@ -1,16 +1,20 @@
 import type { ReactNode } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Activity, Bot, Home, PlugZap, Zap } from 'lucide-react';
+import { systemApi } from '../api';
 import { useDashboard } from '../features/dashboard/hooks';
 import { useEntitiesList } from '../features/entities/hooks';
-import { Card, EmptyState } from '../components/ui';
+import { Badge, Card, EmptyState } from '../components/ui';
 import { EntityControl } from '../components/EntityControl';
 import { FloorPlanCard } from '../components/FloorPlanCard';
 import { PageHeader } from '../components/PageHeader';
+import { queryKeys } from '../shared/queryKeys';
 import { formatDateTime } from '../utils/format';
 
 export function DashboardPage() {
   const dashboard = useDashboard();
   const entities = useEntitiesList();
+  const system = useQuery({ queryKey: queryKeys.system.status(), queryFn: systemApi.status, refetchInterval: 30000 });
   const allEntities = entities.data?.entities ?? [];
   const controls = allEntities.filter((entity) => ['light', 'switch'].includes(entity.domain)).slice(0, 4);
 
@@ -33,6 +37,7 @@ export function DashboardPage() {
         <Metric icon={<Activity />} label="Сегодня" value={`${dashboard.data?.summary.energy_today_kwh ?? 0} кВт·ч`} />
         <Metric icon={<Home />} label="Зоны" value={dashboard.data?.areas.length ?? 0} />
       </div>
+      <SystemStatusCard status={system.data} isError={system.isError} />
       <div className="mt-4 grid gap-4 xl:grid-cols-[1.3fr_0.7fr]">
         <div>
           <h2 className="mb-3 text-lg font-semibold">Зоны</h2>
@@ -71,6 +76,33 @@ export function DashboardPage() {
         </div>
       </div>
     </>
+  );
+}
+
+function SystemStatusCard({
+  status,
+  isError,
+}: {
+  status?: Awaited<ReturnType<typeof systemApi.status>>;
+  isError: boolean;
+}) {
+  return (
+    <Card className="mt-4">
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h2 className="text-base font-semibold">Статус системы</h2>
+          <p className="text-xs text-muted">API, база данных и MQTT runtime для demo/prod проверки</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Badge tone={isError ? 'danger' : 'success'}>API {isError ? 'нет связи' : status?.api ?? 'ready'}</Badge>
+          <Badge tone={status?.database === 'ready' && !isError ? 'success' : 'warning'}>DB {status?.database ?? 'unknown'}</Badge>
+          <Badge tone={status?.mqtt.connected ? 'success' : status?.mqtt.enabled ? 'warning' : 'neutral'}>
+            MQTT {status?.mqtt.enabled ? (status.mqtt.connected ? 'connected' : 'enabled') : 'disabled'}
+          </Badge>
+          <Badge tone={status?.runtime.sim_enabled ? 'warning' : 'neutral'}>SIM {status?.runtime.sim_enabled ? 'on' : 'off'}</Badge>
+        </div>
+      </div>
+    </Card>
   );
 }
 

@@ -8,11 +8,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.models import Device, Integration
-from app.routers.deps import CurrentUser, Db
-from app.schemas import IntegrationCreate, IntegrationImport, IntegrationUpdate
+from app.core.dependencies import CurrentUser, Db
+from app.schemas import IntegrationCreate, IntegrationImport, IntegrationUpdate, MqttDeviceCreate
 from app.serializers import device_out, integration_out
 from app.services.common import delete_by_id, get_default_home
-from app.services.integrations import discovery_preview, get_integration_or_404, import_discovered_devices, supported_integration_domain
+from app.services.integrations import create_mqtt_device, discovery_preview, get_integration_or_404, import_discovered_devices, supported_integration_domain
+from app.services.mqtt_client import mqtt_client
 
 router = APIRouter()
 
@@ -82,3 +83,12 @@ async def import_integration_devices(integration_id: uuid.UUID, payload: Integra
         "skipped": result["skipped"],
         "devices": imported_devices,
     }
+
+
+@router.post("/integrations/{integration_id}/mqtt/devices", status_code=201)
+async def create_integration_mqtt_device(integration_id: uuid.UUID, payload: MqttDeviceCreate, _: CurrentUser, db: Db) -> dict[str, Any]:
+    integration = await get_integration_or_404(db, integration_id)
+    device = await create_mqtt_device(db, integration, payload)
+    await mqtt_client.refresh_subscriptions()
+    result = await db.execute(select(Device).options(selectinload(Device.area), selectinload(Device.entities)).where(Device.id == device.id))
+    return device_out(result.scalar_one(), detailed=True)

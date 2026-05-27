@@ -32,6 +32,23 @@ def _load_ml_model() -> ModelArtifact:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
+def _fallback_anomaly_indexes(rows: list[EnergyFeatureRow], timeline: list[dict[str, Any]]) -> set[int]:
+    """Surface obvious outliers when the ML window is too small to emit anomalies."""
+    candidates: list[tuple[int, float]] = []
+    for index, row in enumerate(rows):
+        hour = row.recorded_at.hour
+        obvious_peak = row.power_w >= 1500
+        night_spike = hour < 6 and row.power_w >= 700
+        if obvious_peak or night_spike:
+            candidates.append((index, float(timeline[index]["anomaly_score"])))
+
+    if not candidates:
+        return set()
+
+    candidates.sort(key=lambda item: item[1], reverse=True)
+    return {candidates[0][0]}
+
+
 async def load_energy_feature_rows(db: AsyncSession, period: str, limit: int) -> list[EnergyFeatureRow]:
     start = period_start(period)
     rows = (
@@ -107,6 +124,24 @@ async def detect_energy_anomalies(db: AsyncSession, period: str, limit: int) -> 
                     "anomaly_score": anomaly_score,
                     "severity": severity_for_score(anomaly_score),
                     "reason": reason_for(row.device_name, row.power_w, row.recorded_at.hour, anomaly_score),
+                }
+            )
+
+    if not anomalies:
+        for index in _fallback_anomaly_indexes(rows, timeline):
+            row = rows[index]
+            timeline[index]["anomaly"] = True
+            anomalies.append(
+                {
+                    "id": row.id,
+                    "entity_id": row.entity_id,
+                    "device_name": row.device_name,
+                    "recorded_at": row.recorded_at.isoformat(),
+                    "power_w": round(row.power_w, 2),
+                    "energy_kwh": round(row.energy_kwh, 3),
+                    "anomaly_score": float(timeline[index]["anomaly_score"]),
+                    "severity": severity_for_score(float(timeline[index]["anomaly_score"])),
+                    "reason": reason_for(row.device_name, row.power_w, row.recorded_at.hour, float(timeline[index]["anomaly_score"])),
                 }
             )
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any
 
@@ -7,6 +8,53 @@ from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.entities import get_entity_or_404, set_entity_state
+
+logger = logging.getLogger(__name__)
+
+
+async def _publish_mqtt_command(entity: Any, domain: str, action: str, data: dict[str, Any], new_state: str) -> None:
+    """Publish a command to MQTT for mqtt-platform entities.
+
+    Only publishes if the entity has command topics in its attributes.
+    This is a fire-and-forget operation — the actual state update
+    will come back through the MQTT listener when the device confirms.
+    """
+    from app.services.mqtt_client import mqtt_client
+
+    attrs = entity.attributes_json or {}
+
+    # Only publish for mqtt-platform entities that have command topics
+    command_topic = attrs.get("command_topic")
+    if command_topic is None:
+        return
+
+    try:
+        # Publish main command
+        payload: str | dict
+        if domain == "light":
+            payload = new_state  # "on" or "off"
+            await mqtt_client.publish(command_topic, payload)
+            # Publish brightness command if applicable
+            brightness_topic = attrs.get("brightness_command_topic")
+            if brightness_topic and "brightness" in data:
+                await mqtt_client.publish(brightness_topic, str(data["brightness"]))
+        elif domain == "switch":
+            payload = new_state  # "on" or "off"
+            await mqtt_client.publish(command_topic, payload)
+        elif domain == "climate":
+            if action == "set_temperature":
+                payload = data  # {"temperature": 22}
+                await mqtt_client.publish(command_topic, payload)
+            elif action == "set_mode":
+                payload = data  # {"hvac_mode": "heat"}
+                await mqtt_client.publish(command_topic, payload)
+        else:
+            payload = new_state
+            await mqtt_client.publish(command_topic, payload)
+
+        logger.info("MQTT command → %s: %s", command_topic, payload)
+    except Exception:
+        logger.exception("Failed to publish MQTT command for %s", entity.entity_id)
 
 
 async def call_action(
@@ -62,4 +110,8 @@ async def call_action(
     await set_entity_state(db, entity, new_state, attrs, source=source, user_id=user_id, automation_id=automation_id)
     await db.commit()
     await db.refresh(entity)
+
+    # Publish MQTT command if this is an MQTT-platform entity
+    await _publish_mqtt_command(entity, domain, action, data or {}, new_state)
+
     return {"ok": True, "entity_id": entity.entity_id, "new_state": entity.state, "attributes": entity.attributes_json or {}}

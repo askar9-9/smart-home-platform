@@ -15,7 +15,7 @@ async def create_default_entity_for_device(db: AsyncSession, device: Device) -> 
     base = {
         "device_id": device.id,
         "area_id": device.area_id,
-        "platform": "demo",
+        "platform": "manual",
         "name": device.name_by_user or device.name,
         "original_name": device.name,
     }

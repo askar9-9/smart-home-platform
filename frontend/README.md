@@ -1,6 +1,6 @@
-# Smart Home Frontend
+# homeIQ Frontend
 
-Frontend application for the Smart Home monorepo.
+Frontend application for the homeIQ monorepo.
 
 ## Run
 

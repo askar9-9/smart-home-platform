@@ -54,7 +54,7 @@ class DeviceUpdate(BaseModel):
 
 class IntegrationCreate(BaseModel):
     name: str
-    domain: str = "demo"
+    domain: str = "mqtt"
     config: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -65,6 +65,35 @@ class IntegrationUpdate(BaseModel):
 
 class IntegrationImport(BaseModel):
     discovered_ids: list[str] | None = None
+
+
+class MqttEntitySpec(BaseModel):
+    entity_id: str
+    domain: str
+    name: str
+    state: str = "unknown"
+    state_topic: str
+    command_topic: str | None = None
+    availability_topic: str | None = None
+    unit_of_measurement: str | None = None
+    device_class: str | None = None
+    attributes: dict[str, Any] = Field(default_factory=dict)
+    brightness_state_topic: str | None = None
+    brightness_command_topic: str | None = None
+
+
+class MqttDeviceCreate(BaseModel):
+    name: str
+    type: str
+    area_id: uuid.UUID | None = None
+    manufacturer: str | None = None
+    model: str | None = None
+    status: str = "online"
+    entities: list[MqttEntitySpec] = Field(min_length=1)
+
+
+class MqttDeviceCreateResponse(BaseModel):
+    device: dict[str, Any]
 
 
 class EntityStatePatch(BaseModel):

@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Response
 from sqlalchemy import select
 
 from app.models import Area
-from app.routers.deps import CurrentUser, Db
+from app.core.dependencies import CurrentUser, Db
 from app.schemas import AreaCreate, AreaUpdate
 from app.serializers import area_out
 from app.services.common import delete_by_id, get_default_home

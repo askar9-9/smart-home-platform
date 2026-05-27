@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Query, Response
 from sqlalchemy import func, select
 
 from app.models import Automation
-from app.routers.deps import CurrentUser, Db
+from app.core.dependencies import CurrentUser, Db
 from app.schemas import AutomationCreate, AutomationUpdate
 from app.serializers import automation_out
 from app.services.automations import run_automation

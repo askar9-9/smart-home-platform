@@ -1,17 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { QueryClient, useQueryClient } from '@tanstack/react-query';
 import { dashboardApi, energyApi, eventsApi } from '../../api';
-import { getToken } from '../../api/client';
 import type { Period, StreamEvent } from '../../api/types';
 import { queryKeys } from '../../shared/queryKeys';
 import { invalidateRealtimeReadModels } from '../../shared/queryInvalidation';
 import { entitiesApi } from '../entities/api';
 import { applyStreamEventToCache } from '../entities/cache';
-import { createRealtimeEventSource } from './api';
+import { useEventSource, type RealtimeStatus } from './connection';
 
-export type RealtimeStatus = 'connecting' | 'live' | 'polling' | 'offline';
-
-export function applyStreamEvent(queryClient: QueryClient, event: StreamEvent) {
+function applyStreamEvent(queryClient: QueryClient, event: StreamEvent) {
   if (event.type === 'state_changed' && event.entity_id) {
     applyStreamEventToCache(queryClient, event);
     void invalidateRealtimeReadModels(queryClient);
@@ -23,69 +20,49 @@ export function applyStreamEvent(queryClient: QueryClient, event: StreamEvent) {
   }
 }
 
-export function useRealtimeSync(period: Period = 'day') {
+async function pollReadModels(queryClient: QueryClient, period: Period) {
+  const [entitiesResult, dashboard, summary, events] = await Promise.allSettled([
+    entitiesApi.list(),
+    dashboardApi.get(),
+    energyApi.summary(period),
+    eventsApi.list({ limit: 10, offset: 0 }),
+  ]);
+  if (entitiesResult.status === 'fulfilled') {
+    queryClient.setQueryData(queryKeys.entities.list(), entitiesResult.value);
+  }
+  if (dashboard.status === 'fulfilled') {
+    queryClient.setQueryData(queryKeys.dashboard.all(), dashboard.value);
+  }
+  if (summary.status === 'fulfilled') {
+    queryClient.setQueryData(queryKeys.energy.summary(period), summary.value);
+  }
+  if (events.status === 'fulfilled') {
+    queryClient.setQueryData(queryKeys.events.list({ limit: 10, offset: 0 }), events.value);
+  }
+}
+
+export function useRealtimeSync(period: Period = 'day'): RealtimeStatus {
   const queryClient = useQueryClient();
-  const [status, setStatus] = useState<RealtimeStatus>('connecting');
+  const { status, onMessage } = useEventSource();
+  const periodRef = useRef(period);
+  periodRef.current = period;
 
   useEffect(() => {
-    const token = getToken();
-    if (!token) {
-      setStatus('offline');
-      return undefined;
-    }
-
-    const source = createRealtimeEventSource(token);
-    let pollingId: number | undefined;
-
-    const poll = async () => {
-      setStatus('polling');
-      const [entitiesResult, dashboard, summary, events] = await Promise.allSettled([
-        entitiesApi.list(),
-        dashboardApi.get(),
-        energyApi.summary(period),
-        eventsApi.list({ limit: 10, offset: 0 }),
-      ]);
-      if (entitiesResult.status === 'fulfilled') {
-        queryClient.setQueryData(queryKeys.entities.list(), entitiesResult.value);
+    onMessage((data: string) => {
+      if (data === '__poll__') {
+        void pollReadModels(queryClient, periodRef.current);
+        return;
       }
-      if (dashboard.status === 'fulfilled') {
-        queryClient.setQueryData(queryKeys.dashboard.all(), dashboard.value);
-      }
-      if (summary.status === 'fulfilled') {
-        queryClient.setQueryData(queryKeys.energy.summary(period), summary.value);
-      }
-      if (events.status === 'fulfilled') {
-        queryClient.setQueryData(queryKeys.events.list({ limit: 10, offset: 0 }), events.value);
-      }
-    };
-
-    source.onopen = () => {
-      setStatus('live');
-      if (pollingId) window.clearInterval(pollingId);
-      pollingId = undefined;
-    };
-
-    source.onmessage = (message) => {
       try {
-        applyStreamEvent(queryClient, JSON.parse(message.data) as StreamEvent);
+        applyStreamEvent(queryClient, JSON.parse(data) as StreamEvent);
       } catch {
         void queryClient.invalidateQueries();
       }
-    };
-
-    source.onerror = () => {
-      setStatus('polling');
-      if (!pollingId) {
-        void poll();
-        pollingId = window.setInterval(poll, 5000);
-      }
-    };
-
-    return () => {
-      source.close();
-      if (pollingId) window.clearInterval(pollingId);
-    };
-  }, [period, queryClient]);
+    });
+  }, [queryClient, onMessage]);
 
   return status;
 }
+
+export { applyStreamEvent };
+export type { RealtimeStatus } from './connection';

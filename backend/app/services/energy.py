@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Device, EnergyReading, Entity
 from app.services.common import get_default_home
+from app.services.energy_ingest import coerce_numeric_value
 from app.services.entities import get_entity_or_404
 
 
@@ -20,25 +21,22 @@ def period_start(period: str) -> datetime:
     return now.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
-def coerce_numeric_state(value: Any) -> float | None:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
+def power_readings_stmt(*columns: Any, device_class: str = "power"):
+    return select(*columns).join(Entity, Entity.entity_id == EnergyReading.entity_id).where(Entity.device_class == device_class)
 
 
 async def energy_summary(db: AsyncSession, period: str = "day") -> dict[str, Any]:
     home = await get_default_home(db)
     start = period_start(period)
     end = datetime.now(UTC)
-    total = (await db.execute(select(func.coalesce(func.sum(EnergyReading.energy_kwh), 0)).where(EnergyReading.recorded_at >= start))).scalar_one()
+    total = (await db.execute(power_readings_stmt(func.coalesce(func.sum(EnergyReading.energy_kwh), 0)).where(EnergyReading.recorded_at >= start))).scalar_one()
     current_power_entities = (await db.execute(select(Entity.state).where(Entity.device_class == "power"))).scalars().all()
-    current_power = sum(value for item in current_power_entities if (value := coerce_numeric_state(item)) is not None)
+    current_power = sum(value for item in current_power_entities if (value := coerce_numeric_value(item)) is not None)
     if current_power == 0:
         current_power = (
-            await db.execute(select(func.coalesce(func.sum(EnergyReading.power_w), 0)).where(EnergyReading.recorded_at >= end - timedelta(hours=1)))
+            await db.execute(power_readings_stmt(func.coalesce(func.sum(EnergyReading.power_w), 0)).where(EnergyReading.recorded_at >= end - timedelta(hours=1)))
         ).scalar_one()
-    peak = (await db.execute(select(func.coalesce(func.max(EnergyReading.power_w), 0)).where(EnergyReading.recorded_at >= start))).scalar_one()
+    peak = (await db.execute(power_readings_stmt(func.coalesce(func.max(EnergyReading.power_w), 0)).where(EnergyReading.recorded_at >= start))).scalar_one()
     device_count = (await db.execute(select(func.count(Device.id)))).scalar_one()
     return {
         "period": period,
@@ -57,7 +55,7 @@ async def energy_consumption(db: AsyncSession, period: str = "day", granularity:
     start = period_start(period)
     rows = (
         await db.execute(
-            select(
+            power_readings_stmt(
                 func.date_trunc(granularity, EnergyReading.recorded_at).label("bucket"),
                 func.sum(EnergyReading.energy_kwh),
                 func.avg(EnergyReading.power_w),
@@ -74,7 +72,7 @@ async def energy_devices(db: AsyncSession, period: str = "day") -> list[dict[str
     start = period_start(period)
     rows = (
         await db.execute(
-            select(EnergyReading.entity_id, func.sum(EnergyReading.energy_kwh), func.avg(EnergyReading.power_w))
+            power_readings_stmt(EnergyReading.entity_id, func.sum(EnergyReading.energy_kwh), func.avg(EnergyReading.power_w))
             .where(EnergyReading.recorded_at >= start)
             .group_by(EnergyReading.entity_id)
         )
@@ -105,7 +103,7 @@ async def energy_devices(db: AsyncSession, period: str = "day") -> list[dict[str
 
 
 async def energy_forecast(db: AsyncSession) -> dict[str, Any]:
-    rows = (await db.execute(select(EnergyReading.power_w, EnergyReading.energy_kwh).order_by(EnergyReading.recorded_at.desc()).limit(24))).all()
+    rows = (await db.execute(power_readings_stmt(EnergyReading.power_w, EnergyReading.energy_kwh).order_by(EnergyReading.recorded_at.desc()).limit(24))).all()
     values = list(reversed(rows)) or [(0, 0)]
     forecast = [{"hour": index, "predicted_kwh": round(float(row[1] or 0), 3), "predicted_power_w": round(float(row[0] or 0), 2)} for index, row in enumerate(values[:24])]
     return {"period_hours": 24, "forecast": forecast, "total_predicted_kwh": round(sum(item["predicted_kwh"] for item in forecast), 3), "confidence": "mock"}

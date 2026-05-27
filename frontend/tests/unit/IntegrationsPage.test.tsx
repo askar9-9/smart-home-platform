@@ -5,13 +5,15 @@ import type { Integration } from '../../src/api/types';
 import { IntegrationsPage } from '../../src/pages/IntegrationsPage';
 import { renderApp } from './test-utils';
 
-const { listIntegrationsMock, updateIntegrationMock, removeIntegrationMock, discoverIntegrationMock, importIntegrationMock, createIntegrationMock } = vi.hoisted(() => ({
+const { listIntegrationsMock, updateIntegrationMock, removeIntegrationMock, discoverIntegrationMock, importIntegrationMock, createIntegrationMock, createMqttDeviceMock, listAreasMock } = vi.hoisted(() => ({
   listIntegrationsMock: vi.fn(),
   updateIntegrationMock: vi.fn(),
   removeIntegrationMock: vi.fn(),
   discoverIntegrationMock: vi.fn(),
   importIntegrationMock: vi.fn(),
   createIntegrationMock: vi.fn(),
+  createMqttDeviceMock: vi.fn(),
+  listAreasMock: vi.fn(),
 }));
 
 vi.mock('../../src/api', async () => {
@@ -26,6 +28,11 @@ vi.mock('../../src/api', async () => {
       discover: discoverIntegrationMock,
       import: importIntegrationMock,
       create: createIntegrationMock,
+      createMqttDevice: createMqttDeviceMock,
+    },
+    areasApi: {
+      ...actual.areasApi,
+      list: listAreasMock,
     },
   };
 });
@@ -36,7 +43,7 @@ describe('IntegrationsPage', () => {
       {
         id: 'int-1',
         name: 'Hub A',
-        domain: 'demo',
+        domain: 'mqtt',
         config: { room: 'hallway' },
         device_count: 0,
         created_at: '2026-05-21T00:00:00Z',
@@ -49,6 +56,8 @@ describe('IntegrationsPage', () => {
     discoverIntegrationMock.mockReset();
     importIntegrationMock.mockReset();
     createIntegrationMock.mockReset();
+    createMqttDeviceMock.mockReset();
+    listAreasMock.mockReset();
 
     listIntegrationsMock.mockImplementation(async () => integrations);
     updateIntegrationMock.mockImplementation(async (id: string, payload: { name: string; config: Record<string, unknown> }) => {
@@ -59,6 +68,8 @@ describe('IntegrationsPage', () => {
     discoverIntegrationMock.mockResolvedValue([]);
     importIntegrationMock.mockResolvedValue({ integration_id: 'int-1', imported: 0, skipped: [], devices: [] });
     createIntegrationMock.mockResolvedValue({});
+    createMqttDeviceMock.mockResolvedValue({});
+    listAreasMock.mockResolvedValue([{ id: 'area-1', name: 'Hallway' }]);
   });
 
   it('validates config JSON and refreshes the list after update', async () => {
@@ -85,5 +96,46 @@ describe('IntegrationsPage', () => {
     }));
     await waitFor(() => expect(listIntegrationsMock.mock.calls.length).toBeGreaterThan(1));
     await waitFor(() => expect(screen.getByText('Updated Hub')).toBeInTheDocument());
+  });
+
+  it('defaults new integrations to mqtt for the live demo flow', async () => {
+    const user = userEvent.setup();
+    renderApp(<IntegrationsPage />);
+
+    await waitFor(() => expect(screen.getByText('Hub A')).toBeInTheDocument());
+
+    await user.click(screen.getByRole('button', { name: 'Добавить' }));
+
+    expect(screen.getByLabelText('Домен')).toHaveValue('mqtt');
+    expect(screen.getByText(/Для live demo рекомендуем MQTT/)).toBeInTheDocument();
+  });
+
+  it('creates a custom MQTT device from the constructor', async () => {
+    const user = userEvent.setup();
+    renderApp(<IntegrationsPage />);
+
+    await waitFor(() => expect(screen.getByText('Hub A')).toBeInTheDocument());
+
+    await user.click(screen.getByRole('button', { name: 'Добавить MQTT устройство' }));
+    await waitFor(() => expect(screen.getByText('MQTT конструктор устройства')).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: 'Заполнить topics' }));
+    await user.click(screen.getByRole('button', { name: 'Создать MQTT устройство' }));
+
+    await waitFor(() =>
+      expect(createMqttDeviceMock).toHaveBeenCalledWith(
+        'int-1',
+        expect.objectContaining({
+          name: 'Presentation Lamp',
+          type: 'light',
+          entities: [
+            expect.objectContaining({
+              entity_id: 'light.presentation_lamp',
+              state_topic: 'home/custom/presentation_lamp/state',
+              command_topic: 'home/custom/presentation_lamp/set',
+            }),
+          ],
+        })
+      )
+    );
   });
 });

@@ -15,6 +15,19 @@ services:
       timeout: 3s
       retries: 10
 
+  mosquitto:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/config:/mosquitto/config
+      - mosquitto_data:/mosquitto/data
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_pub -t healthcheck -m ok || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   backend:
     build:
       context: .
@@ -25,10 +38,20 @@ services:
       DATABASE_URL: postgresql+asyncpg://smart_home:smart_home@postgres:5432/smart_home
       SEED_ENABLED: "true"
       SIM_ENABLED: "false"
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      MQTT_ENABLED: "true"
     ports:
       - "8080:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     depends_on:
       postgres:
+        condition: service_healthy
+      mosquitto:
         condition: service_healthy
 
   frontend:
@@ -43,3 +66,4 @@ services:
 
 volumes:
   postgres_data:
+  mosquitto_data:

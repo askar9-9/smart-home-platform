@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from app.models import Device
-from app.routers.deps import CurrentUser, Db
+from app.core.dependencies import CurrentUser, Db
 from app.schemas import DeviceCreate, DeviceUpdate
 from app.serializers import device_out
 from app.services.common import delete_by_id, get_default_home

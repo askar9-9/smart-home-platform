@@ -44,3 +44,8 @@ async def get_current_user_for_sse(
     if credentials is not None:
         return await get_user_from_token(credentials.credentials, db)
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+
+
+CurrentUser = Annotated[User, Depends(get_current_user)]
+SseCurrentUser = Annotated[User, Depends(get_current_user_for_sse)]
+Db = Annotated[AsyncSession, Depends(get_db)]

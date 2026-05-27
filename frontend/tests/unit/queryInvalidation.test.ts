@@ -11,6 +11,6 @@ describe('query invalidation bundles', () => {
     await invalidateEntityReadModels(queryClient);
     await invalidateRealtimeReadModels(queryClient);
 
-    expect(invalidateQueries).toHaveBeenCalledTimes(11);
+    expect(invalidateQueries).toHaveBeenCalledTimes(13);
   });
 });

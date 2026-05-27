@@ -61,4 +61,24 @@ describe('MlAnomaliesPage', () => {
     expect(screen.getByText('Main Energy Power')).toBeInTheDocument();
     expect(screen.getByText('Высокая')).toBeInTheDocument();
   });
+
+  it('shows an explicit empty-state when model is available but timeline is empty', async () => {
+    anomaliesMock.mockResolvedValue({
+      model: {
+        name: 'IsolationForest',
+        dataset: 'UCI Individual Household Electric Power Consumption',
+        trained_at: '2026-05-21T00:00:00+00:00',
+        confidence: 'ml'
+      },
+      summary: { total: 0, anomalies: 0, period: 'day' },
+      anomalies: [],
+      timeline: []
+    });
+
+    renderApp(<MlAnomaliesPage />);
+
+    await waitFor(() => expect(screen.getByText('ML модель загружена, но таймлайн пуст. Для демо нужны seeded energy readings или включенная MQTT simulation.')).toBeInTheDocument());
+    expect(screen.getAllByText('ML модель доступна, но для выбранного периода нет данных энергии.')).toHaveLength(2);
+    expect(screen.getByText('Журнал ML пуст, потому что нет данных энергии.')).toBeInTheDocument();
+  });
 });

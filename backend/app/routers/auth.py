@@ -8,7 +8,7 @@ from sqlalchemy import select
 from app.config import settings
 from app.core.security import create_access_token, verify_password
 from app.models import User
-from app.routers.deps import CurrentUser, Db
+from app.core.dependencies import CurrentUser, Db
 from app.schemas import LoginRequest
 from app.serializers import user_out
 

@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Query
 
-from app.routers.deps import CurrentUser, Db
+from app.core.dependencies import CurrentUser, Db
 from app.services.ml import detect_energy_anomalies
 
 router = APIRouter()

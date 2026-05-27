@@ -1,7 +1,7 @@
 {
-  "name": "Умный дом",
-  "short_name": "SmartHome",
-  "description": "Панель управления умным домом",
+  "name": "homeIQ",
+  "short_name": "homeIQ",
+  "description": "Панель управления умным домом homeIQ",
   "start_url": "/dashboard",
   "display": "standalone",
   "background_color": "#f6f8fb",

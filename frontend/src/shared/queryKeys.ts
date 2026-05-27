@@ -48,6 +48,9 @@ export const queryKeys = {
   dashboard: {
     all: () => ['dashboard'] as const,
   },
+  system: {
+    status: () => ['system', 'status'] as const,
+  },
   areas: {
     all: () => ['areas'] as const,
   },
